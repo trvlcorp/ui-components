@@ -1,0 +1,70 @@
+# Overlap check — pushed into every new repo created by MCP tools.
+#
+# Triggers when catalog entities are added or changed. Checks for overlap
+# with existing repos in the org and creates an advisory issue if found.
+#
+# Requires ORG_AUDIT_TOKEN as an org-level Actions secret with repo scope.
+
+name: Overlap Check
+
+on:
+  push:
+    branches: [main]
+    paths: ['catalog/**']
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  overlap-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for ORG_AUDIT_TOKEN
+        id: auth
+        env:
+          HAS_TOKEN: ${{ secrets.ORG_AUDIT_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::warning::ORG_AUDIT_TOKEN org secret is not configured. Set it with: gh secret set ORG_AUDIT_TOKEN --org <org> (requires a PAT with repo scope). Skipping overlap check."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.auth.outputs.available == 'true'
+        with:
+          repository: trvlcorp/waypoint
+          token: ${{ secrets.ORG_AUDIT_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.auth.outputs.available == 'true'
+
+      - if: steps.auth.outputs.available == 'true'
+        run: cd server && bun install --frozen-lockfile
+
+      - name: Run overlap check
+        id: overlap
+        if: steps.auth.outputs.available == 'true'
+        env:
+          NEW_REPO: ${{ github.event.repository.name }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.ORG_AUDIT_TOKEN }}
+          GITHUB_REPO_TOPIC: waypoint
+        run: |
+          OUTPUT=$(bun run scripts/overlap-check.ts)
+          MATCH_COUNT=$(echo "$OUTPUT" | jq '.matches | length')
+          echo "match_count=$MATCH_COUNT" >> "$GITHUB_OUTPUT"
+          echo "$OUTPUT" > /tmp/overlap-result.json
+
+      - name: Create advisory issue
+        if: steps.auth.outputs.available == 'true' && steps.overlap.outputs.match_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_AUDIT_TOKEN }}
+        run: |
+          ISSUE_BODY=$(jq -r '.issueBody' /tmp/overlap-result.json)
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Catalog overlap detected — consider existing repos" \
+            --body "$ISSUE_BODY"
