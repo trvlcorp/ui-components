@@ -1,0 +1,14 @@
+apiVersion: waypoint/v1
+kind: Service
+metadata:
+  name: ui-components
+  description: Shared UI component library
+  tags:
+    - frontend
+    - component-library
+    - shared
+spec:
+  owner: rob balfre
+  lifecycle: production
+  dependsOn: []
+  providesApis: []
